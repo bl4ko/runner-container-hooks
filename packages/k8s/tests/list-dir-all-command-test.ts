@@ -108,6 +108,21 @@ describe('listDirAllCommand', () => {
       .sort()
   }
 
+  async function hashWithDirectorySize(
+    command: string,
+    size: string
+  ): Promise<string> {
+    return await localCalculateOutputHashSorted([
+      'env',
+      `PATH=${bin}:${process.env.PATH}`,
+      `STAT_CALLS=${calls}`,
+      `DIR_SIZE=${size}`,
+      'sh',
+      '-c',
+      command
+    ])
+  }
+
   function statCalls(): number {
     return fs.readFileSync(calls, 'utf8').length
   }
@@ -124,7 +139,21 @@ describe('listDirAllCommand', () => {
     }).trim()
     fs.writeFileSync(
       path.join(bin, 'stat'),
-      `#!/bin/sh\nprintf x >> "$STAT_CALLS"\nexec ${stat} "$@"\n`,
+      [
+        '#!/bin/sh',
+        'printf x >> "$STAT_CALLS"',
+        `test -n "$DIR_SIZE" || exec ${stat} "$@"`,
+        'format=$2',
+        'shift 2',
+        'for f do',
+        '  if test -d "$f" && test ! -L "$f"; then',
+        '    printf "%s %s\\n" "$DIR_SIZE" "$f"',
+        '  else',
+        `    ${stat} -c "$format" "$f"`,
+        '  fi',
+        'done',
+        ''
+      ].join('\n'),
       { mode: 0o755 }
     )
   })
@@ -163,4 +192,23 @@ describe('listDirAllCommand', () => {
       expect(got).toEqual(want)
     }
   )
+
+  it('gives the same hash when directory sizes differ (runner on XFS, job pod on ext4)', async () => {
+    trees['special characters in names'](root)
+    trees['empty directories'](root)
+    trees.symlinks(root)
+    const command = listDirAllCommand(root)
+    const withDirectories = command.replace(' -type f ', ' ')
+    expect(withDirectories).not.toEqual(command)
+
+    fs.writeFileSync(calls, '')
+    const xfs = await hashWithDirectorySize(command, '6')
+    const ext4 = await hashWithDirectorySize(command, '4096')
+    expect(statCalls()).toBeGreaterThan(0)
+    expect(xfs).toEqual(ext4)
+
+    expect(await hashWithDirectorySize(withDirectories, '6')).not.toEqual(
+      await hashWithDirectorySize(withDirectories, '4096')
+    )
+  })
 })
