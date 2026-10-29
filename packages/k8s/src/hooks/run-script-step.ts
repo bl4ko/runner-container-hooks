@@ -90,18 +90,18 @@ export async function runScriptStep(
     } catch (removeErr) {
       core.debug(`Failed to remove file ${runnerPath}: ${removeErr}`)
     }
-  }
 
-  try {
-    core.debug(
-      `Copying from job pod '${state.jobPod}' ${containerTemp} to ${runnerTemp}`
-    )
-    await execCpFromPod(
-      state.jobPod,
-      `${containerTemp}/_runner_file_commands`,
-      `${workdir}/_temp`
-    )
-  } catch (error) {
-    core.warning('Failed to copy _temp from pod')
+    try {
+      core.debug(
+        `Copying from job pod '${state.jobPod}' ${containerTemp} to ${runnerTemp}`
+      )
+      await execCpFromPod(
+        state.jobPod,
+        `${containerTemp}/_runner_file_commands`,
+        `${workdir}/_temp`
+      )
+    } catch (error) {
+      core.warning('Failed to copy _temp from pod')
+    }
   }
 }
