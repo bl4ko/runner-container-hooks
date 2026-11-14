@@ -25,6 +25,11 @@ import {
   WORK_VOLUME
 } from './utils'
 import * as shlex from 'shlex'
+import {
+  deleteOrphans,
+  orphanMaxAgeSeconds,
+  podOwnerReference
+} from './orphans'
 import { parsePositiveMsEnv, WebSocketHeartbeat } from './heartbeat'
 import type { HeartbeatWebSocket } from './heartbeat'
 
@@ -161,13 +166,10 @@ export async function createJobPod(
     }
   ]
 
-  if (registry) {
-    const secret = await createDockerSecret(registry)
-    if (!secret?.metadata?.name) {
-      throw new Error(`created secret does not have secret.metadata.name`)
-    }
+  const pullSecretName = registry ? getSecretName() : undefined
+  if (pullSecretName) {
     const secretReference = new k8s.V1LocalObjectReference()
-    secretReference.name = secret.metadata.name
+    secretReference.name = pullSecretName
     appPod.spec.imagePullSecrets = [secretReference]
   }
 
@@ -179,10 +181,20 @@ export async function createJobPod(
     mergePodSpecWithOptions(appPod.spec, extension.spec)
   }
 
-  return await k8sApi.createNamespacedPod({
+  const createdPod = await k8sApi.createNamespacedPod({
     namespace: namespace(),
     body: appPod
   })
+
+  if (
+    registry &&
+    pullSecretName &&
+    createdPod.spec?.imagePullSecrets?.some(s => s.name === pullSecretName)
+  ) {
+    await createDockerSecret(registry, pullSecretName, createdPod)
+  }
+
+  return createdPod
 }
 
 export async function createContainerStepPod(
@@ -669,7 +681,9 @@ export async function waitForJobToComplete(jobName: string): Promise<void> {
 }
 
 export async function createDockerSecret(
-  registry: Registry
+  registry: Registry,
+  secretName: string,
+  owner: k8s.V1Pod
 ): Promise<k8s.V1Secret> {
   const authContent = {
     auths: {
@@ -685,13 +699,13 @@ export async function createDockerSecret(
 
   const runnerInstanceLabel = new RunnerInstanceLabel()
 
-  const secretName = getSecretName()
   const secret = new k8s.V1Secret()
   secret.immutable = true
   secret.apiVersion = 'v1'
   secret.metadata = new k8s.V1ObjectMeta()
   secret.metadata.name = secretName
   secret.metadata.namespace = namespace()
+  secret.metadata.ownerReferences = [podOwnerReference(owner)]
   secret.metadata.labels = {
     [runnerInstanceLabel.key]: runnerInstanceLabel.value
   }
@@ -860,6 +874,23 @@ export async function getPodLogs(
     timestamps: false
   })
   await new Promise(resolve => logStream.on('end', () => resolve(null)))
+}
+
+export async function pruneOrphans(): Promise<void> {
+  try {
+    const deleted = await deleteOrphans(
+      k8sApi,
+      namespace(),
+      new RunnerInstanceLabel().value,
+      new Date(),
+      orphanMaxAgeSeconds()
+    )
+    if (deleted.length) {
+      core.info(`Deleted orphaned objects: ${deleted.join(', ')}`)
+    }
+  } catch (err) {
+    core.warning(`Failed to delete orphaned pods: ${err}`)
+  }
 }
 
 export async function prunePods(): Promise<void> {
