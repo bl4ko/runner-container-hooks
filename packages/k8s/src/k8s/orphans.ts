@@ -19,6 +19,18 @@ export function orphanMaxAgeSeconds(): number {
     : DEFAULT_ORPHAN_MAX_AGE_SECONDS
 }
 
+export function isOlderThan(
+  meta: k8s.V1ObjectMeta | undefined,
+  now: Date,
+  maxAgeSeconds: number
+): boolean {
+  const created = meta?.creationTimestamp
+  if (!created) {
+    return false
+  }
+  return (now.getTime() - new Date(created).getTime()) / 1000 > maxAgeSeconds
+}
+
 export function orphanRunners(
   pods: k8s.V1Pod[],
   self: string,
@@ -28,12 +40,11 @@ export function orphanRunners(
   const runners = new Set<string>()
   for (const pod of pods) {
     const runner = pod.metadata?.labels?.[RUNNER_POD_LABEL]
-    const created = pod.metadata?.creationTimestamp
-    if (!runner || runner === self || !created) {
-      continue
-    }
-    const age = (now.getTime() - new Date(created).getTime()) / 1000
-    if (age > maxAgeSeconds) {
+    if (
+      runner &&
+      runner !== self &&
+      isOlderThan(pod.metadata, now, maxAgeSeconds)
+    ) {
       runners.add(runner)
     }
   }
@@ -97,19 +108,24 @@ export async function deleteOrphans(
       }
     }
   }
+  const old = (meta: k8s.V1ObjectMeta | undefined): boolean =>
+    runners.has(meta?.labels?.[RUNNER_POD_LABEL] ?? '') &&
+    isOlderThan(meta, now, maxAgeSeconds)
   await Promise.all([
     ...pods.items
-      .filter(p => runners.has(p.metadata?.labels?.[RUNNER_POD_LABEL] ?? ''))
+      .filter(p => old(p.metadata))
       .map(async p =>
         remove('pod', p.metadata?.name, async name =>
           api.deleteNamespacedPod({ name, namespace })
         )
       ),
-    ...secrets.items.map(async s =>
-      remove('secret', s.metadata?.name, async name =>
-        api.deleteNamespacedSecret({ name, namespace })
+    ...secrets.items
+      .filter(s => old(s.metadata))
+      .map(async s =>
+        remove('secret', s.metadata?.name, async name =>
+          api.deleteNamespacedSecret({ name, namespace })
+        )
       )
-    )
   ])
   return deleted.sort((a, b) => a.localeCompare(b))
 }
