@@ -24,8 +24,14 @@ function pod(
   }
 }
 
-function secret(name: string, runner: string): k8s.V1Secret {
-  return { metadata: { name, labels: { 'runner-pod': runner } } }
+function secret(name: string, runner: string, ageSeconds = 4000): k8s.V1Secret {
+  return {
+    metadata: {
+      name,
+      labels: { 'runner-pod': runner },
+      creationTimestamp: new Date(now.getTime() - ageSeconds * 1000)
+    }
+  }
 }
 
 describe('orphan age logic', () => {
@@ -82,14 +88,14 @@ describe('deleteOrphans', () => {
     } as unknown as jest.Mocked<OrphanApi>
   }
 
-  it('deletes all pods and secrets of an orphaned runner only', async () => {
+  it('deletes only old pods and secrets of an orphaned runner', async () => {
     const a = api(
       [
         pod('old-workflow', 'old', 4000),
         pod('old-step', 'old', 30),
         pod('live-workflow', 'live', 100)
       ],
-      [secret('old-secret-1', 'old')]
+      [secret('old-secret-1', 'old'), secret('old-secret-new', 'old', 30)]
     )
     const deleted = await deleteOrphans(a, 'ns-jobs', 'self', now, 3600)
     expect(a.listNamespacedPod).toHaveBeenCalledWith({
@@ -100,13 +106,14 @@ describe('deleteOrphans', () => {
       namespace: 'ns-jobs',
       labelSelector: 'runner-pod in (old)'
     })
-    expect(deleted).toEqual([
-      'pod/old-step',
-      'pod/old-workflow',
-      'secret/old-secret-1'
-    ])
-    expect(a.deleteNamespacedPod).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'live-workflow' })
+    expect(deleted).toEqual(['pod/old-workflow', 'secret/old-secret-1'])
+    for (const name of ['live-workflow', 'old-step']) {
+      expect(a.deleteNamespacedPod).not.toHaveBeenCalledWith(
+        expect.objectContaining({ name })
+      )
+    }
+    expect(a.deleteNamespacedSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'old-secret-new' })
     )
   })
 
