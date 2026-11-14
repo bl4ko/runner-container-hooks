@@ -12,6 +12,7 @@ import {
   createJobPod,
   isPodContainerAlpine,
   prunePods,
+  pruneOrphans,
   waitForPodPhases,
   getPrepareJobTimeoutSeconds,
   execCpToPod,
@@ -44,6 +45,7 @@ export async function prepareJob(
   }
 
   await prunePods()
+  await pruneOrphans()
 
   const extension = readExtensionFromFile()
 
