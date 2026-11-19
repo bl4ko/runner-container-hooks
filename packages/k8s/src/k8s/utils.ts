@@ -216,7 +216,11 @@ export function mergePodSpecWithOptions(
       )
     } else if (key === 'volumes' && value) {
       const volumes = value as k8s.V1Volume[]
-      base.volumes = mergeLists(base.volumes, volumes)
+      const names = new Set(volumes.map(v => v.name))
+      base.volumes = mergeLists(
+        base.volumes?.filter(v => !names.has(v.name)),
+        volumes
+      )
     } else {
       base[key] = value
     }
